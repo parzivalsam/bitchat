@@ -1,0 +1,4 @@
+bleak<0.20
+bless
+PyQt6
+qasync
