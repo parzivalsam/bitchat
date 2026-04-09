@@ -3,6 +3,8 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QScrollArea, QFrame, QScrollBar
 )
 from PyQt6.QtCore import Qt
+from qasync import asyncSlot
+import time
 
 class ChatWindow(QWidget):
     def __init__(self, chat_id, chat_name, chat_manager, is_group=False, parent=None):
@@ -146,22 +148,22 @@ class ChatWindow(QWidget):
         scrollbar = self.scroll_area.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
-    def send_message(self):
+    @asyncSlot()
+    async def send_message(self):
         text = self.input_field.toPlainText().strip()
         if not text: return
         self.input_field.clear()
         import asyncio
-        asyncio.create_task(self.chat_manager.send_message(self.chat_id, text))
+        await self.chat_manager.send_message(self.chat_id, text)
 
-    def on_my_typing(self):
+    @asyncSlot()
+    async def on_my_typing(self):
         # Debounce the typing indicator emission to avoid flooding
-        import time
         now = time.time()
         if not hasattr(self, 'last_typing_sent') or now - self.last_typing_sent > 2.0:
             if self.input_field.toPlainText().strip():
                 self.last_typing_sent = now
-                import asyncio
-                asyncio.create_task(self.chat_manager.send_typing(self.chat_id))
+                await self.chat_manager.send_typing(self.chat_id)
 
     def show_typing_indicator(self):
         from PyQt6.QtCore import QTimer

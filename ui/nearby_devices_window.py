@@ -9,7 +9,6 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from qasync import asyncSlot
-import qasync
 import asyncio
 
 
@@ -71,10 +70,9 @@ class NearbyDevicesWindow(QDialog):
         btn_layout.addWidget(self.connect_btn)
 
         self.list_widget.itemSelectionChanged.connect(
-            lambda: self.connect_btn.setEnabled(
-                len(self.list_widget.selectedItems()) > 0
-            )
+            self._on_selection_changed
         )
+
 
         layout.addLayout(btn_layout)
 
@@ -106,11 +104,11 @@ class NearbyDevicesWindow(QDialog):
             self.scan_btn.setText("Stop Scan")
 
 
-    def connect_to_selected(self):
-        asyncio.create_task(self._connect_to_selected())
+    def _on_selection_changed(self):
+        self.connect_btn.setEnabled(len(self.list_widget.selectedItems()) > 0)
 
-
-    async def _connect_to_selected(self):
+    @asyncSlot()
+    async def connect_to_selected(self):
         selected = self.list_widget.selectedItems()
         if not selected:
             return

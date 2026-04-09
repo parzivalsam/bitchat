@@ -9,10 +9,11 @@ class ChatManager(QObject):
     message_status_changed = pyqtSignal(str, str, str) # (chat_id, msg_id, status)
     typing_indicator_received = pyqtSignal(str) # (user_id)
 
-    def __init__(self, db_manager, current_user_id, current_user_name="", crypto_manager=None):
+    def __init__(self, db_manager, current_user_id, current_user_name="", crypto_manager=None, server=None):
         super().__init__()
         self.db = db_manager
         self.crypto = crypto_manager
+        self.server = server
         self.current_user_id = current_user_id
         self.current_user_name = current_user_name
         self.pending_handshakes = {}
@@ -21,6 +22,9 @@ class ChatManager(QObject):
         self.active_clients = {}
         # map of user_id -> mac_address for seamless reversing
         self.user_to_mac = {}
+        
+        # Dict to track cooldowns for scanning
+        self.attempted_reconnects = {}
         
         # Single message handler for incoming chunks
         self.message_handler = MessageHandler()
@@ -130,10 +134,18 @@ class ChatManager(QObject):
                 "sender_name": self.current_user_name,
                 "pub_key": self.crypto.get_public_key_b64()
             })
+            
+            # Send backwards over client if avail, else broadcast over server
             device_address = self.user_to_mac.get(user_id, user_id)
             client = self.active_clients.get(device_address)
-            if client:
+            if client and client.client.is_connected:
                 await client.send_message(payload, 0)
+            elif self.server:
+                from messaging.packet_protocol import PacketProtocol
+                _, chunks = PacketProtocol.create_chunks(payload, 0)
+                for chunk in chunks:
+                    await self.server.send_notification(chunk)
+                    await asyncio.sleep(0.05)
 
     async def connect_to_user(self, target_id):
         device_address = target_id
@@ -184,11 +196,10 @@ class ChatManager(QObject):
         """Background loop to send pending messages when devices reconnect."""
         import asyncio
         import json
+        import time
         while True:
             await asyncio.sleep(5)
             pending = self.db.get_pending_messages()
-            
-            attempted_reconnects = set()
             
             for msg_id, chat_id, text in pending:
                 device_address = chat_id
@@ -196,10 +207,12 @@ class ChatManager(QObject):
                     device_address = self.user_to_mac.get(chat_id, chat_id)
                 
                 is_connected = False
+                now = time.time()
+                
                 if device_address in self.active_clients and self.active_clients[device_address].client.is_connected:
                     is_connected = True
-                elif chat_id not in attempted_reconnects:
-                    attempted_reconnects.add(chat_id)
+                elif now - self.attempted_reconnects.get(chat_id, 0) > 60:
+                    self.attempted_reconnects[chat_id] = now
                     is_connected = await self.connect_to_user(chat_id)
                 
                 if is_connected:
@@ -220,11 +233,22 @@ class ChatManager(QObject):
                     
                     device_address = self.user_to_mac.get(chat_id, chat_id)
                     client = self.active_clients.get(device_address)
-                    if client:
-                        success = await client.send_message(payload, int(msg_id) if msg_id.isdigit() else 0)
-                        if success:
-                            self.db.update_message_status(msg_id, "sent")
-                            self.message_status_changed.emit(chat_id, msg_id, "sent")
+                    msg_id_int = int(msg_id) if msg_id.isdigit() else 0
+                    
+                    success = False
+                    if client and client.client.is_connected:
+                        success = await client.send_message(payload, msg_id_int)
+                    elif self.server:
+                        from messaging.packet_protocol import PacketProtocol
+                        _, chunks = PacketProtocol.create_chunks(payload, msg_id_int)
+                        for chunk in chunks:
+                            await self.server.send_notification(chunk)
+                            await asyncio.sleep(0.05)
+                        success = True # Assume success if broadcasted via Server
+
+                    if success:
+                        self.db.update_message_status(msg_id, "sent")
+                        self.message_status_changed.emit(chat_id, msg_id, "sent")
 
     async def send_message(self, chat_id, text):
         """Sends a message to the specified chat_id (device address)"""
@@ -271,8 +295,19 @@ class ChatManager(QObject):
             if ":" not in chat_id and "-" not in chat_id and len(chat_id) == 8:
                 device_address = self.user_to_mac.get(chat_id, chat_id)
                 
-        client = self.active_clients[device_address]
-        success = await client.send_message(payload_str, msg_id_int)
+        client = self.active_clients.get(device_address)
+        
+        success = False
+        if client and client.client.is_connected:
+            success = await client.send_message(payload_str, msg_id_int)
+        elif self.server:
+            from messaging.packet_protocol import PacketProtocol
+            _, chunks = PacketProtocol.create_chunks(payload_str, msg_id_int)
+            for chunk in chunks:
+                await self.server.send_notification(chunk)
+                await asyncio.sleep(0.05)
+            success = True
+            
         if success:
             self.db.update_message_status(str_msg_id, "sent")
             self.message_status_changed.emit(chat_id, str_msg_id, "sent")
@@ -287,6 +322,14 @@ class ChatManager(QObject):
             payload = json.dumps({"type": "typing", "sender_id": self.current_user_id})
             client = self.active_clients[device_address]
             await client.send_message(payload, 0)
+        elif self.server:
+            import json
+            from messaging.packet_protocol import PacketProtocol
+            payload = json.dumps({"type": "typing", "sender_id": self.current_user_id})
+            _, chunks = PacketProtocol.create_chunks(payload, 0)
+            for chunk in chunks:
+                await self.server.send_notification(chunk)
+                await asyncio.sleep(0.02)
 
     async def send_conn_req(self, chat_id):
         device_address = chat_id
@@ -302,6 +345,19 @@ class ChatManager(QObject):
             })
             client = self.active_clients[device_address]
             await client.send_message(payload, 0)
+        elif self.server and self.crypto:
+            import json
+            from messaging.packet_protocol import PacketProtocol
+            payload = json.dumps({
+                "type": "conn_req",
+                "sender_id": self.current_user_id,
+                "sender_name": self.current_user_name,
+                "pub_key": self.crypto.get_public_key_b64()
+            })
+            _, chunks = PacketProtocol.create_chunks(payload, 0)
+            for chunk in chunks:
+                await self.server.send_notification(chunk)
+                await asyncio.sleep(0.05)
 
     async def send_ack(self, chat_id, msg_id):
         device_address = chat_id
@@ -312,3 +368,11 @@ class ChatManager(QObject):
             payload = json.dumps({"type": "ack", "msg_id": msg_id, "sender_id": self.current_user_id})
             client = self.active_clients[device_address]
             await client.send_message(payload, 0)
+        elif self.server:
+            import json
+            from messaging.packet_protocol import PacketProtocol
+            payload = json.dumps({"type": "ack", "msg_id": msg_id, "sender_id": self.current_user_id})
+            _, chunks = PacketProtocol.create_chunks(payload, 0)
+            for chunk in chunks:
+                await self.server.send_notification(chunk)
+                await asyncio.sleep(0.02)

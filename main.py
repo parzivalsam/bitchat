@@ -53,7 +53,7 @@ def main():
     adv_name = f"BLECHAT_{my_user_id}"
     server = BLEGattServer(adv_name)
 
-    chat_manager = ChatManager(db, my_user_id, my_device_name, crypto_mgr)
+    chat_manager = ChatManager(db, my_user_id, my_device_name, crypto_mgr, server)
     group_manager = GroupManager(db, chat_manager)
 
     # Since we can't easily get the MAC address of the remote device writing to us,

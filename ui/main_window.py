@@ -125,20 +125,20 @@ class MainWindow(QMainWindow):
         self.chat_list.addItem(item)
 
     def show_nearby_devices(self):
-
-        dialog = NearbyDevicesWindow(self.scanner, self.chat_manager, self)
-
-    # start scan in background
+        self.dialog = NearbyDevicesWindow(self.scanner, self.chat_manager, self)
+        
+        # start scan in background
         asyncio.create_task(self.scanner.start_scanning())
-        dialog.scan_btn.setText("Stop Scan")
+        self.dialog.scan_btn.setText("Stop Scan")
+        
+        self.dialog.finished.connect(self._on_nearby_dialog_finished)
+        self.dialog.open()
 
-        if dialog.exec():
-            self._load_chats()
-            if hasattr(dialog, 'connected_address'):
-                self._open_chat_by_id(dialog.connected_address)
-
-    # stop scan after dialog closes
+    def _on_nearby_dialog_finished(self, result):
         asyncio.create_task(self.scanner.stop_scanning())
+        self._load_chats()
+        if hasattr(self.dialog, 'connected_address'):
+            self._open_chat_by_id(self.dialog.connected_address)
 
     def _open_chat_by_id(self, chat_id):
         for i in range(self.chat_list.count()):
