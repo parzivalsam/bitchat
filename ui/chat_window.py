@@ -24,17 +24,17 @@ class ChatWindow(QWidget):
         
         # Header
         header = QFrame()
-        header.setStyleSheet("background-color: #f0f2f5; border-bottom: 1px solid #ddd;")
+        header.setStyleSheet("background-color: #1e1e24; border-bottom: 1px solid #333333;")
         header.setFixedHeight(60)
         header_layout = QHBoxLayout(header)
         
         title_layout = QVBoxLayout()
         title_layout.setSpacing(0)
         title = QLabel(self.chat_name)
-        title.setStyleSheet("font-size: 16px; font-weight: bold; padding: 5px 10px 0 10px; color: black;")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; padding: 5px 10px 0 10px; color: #ffffff;")
         
         self.status_label = QLabel("Offline / Unknown")
-        self.status_label.setStyleSheet("font-size: 12px; color: gray; padding: 0 10px 5px 10px;")
+        self.status_label.setStyleSheet("font-size: 12px; color: #a1a1aa; padding: 0 10px 5px 10px;")
         
         title_layout.addWidget(title)
         title_layout.addWidget(self.status_label)
@@ -46,7 +46,7 @@ class ChatWindow(QWidget):
         # Messages Area
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setStyleSheet("background-color: #e5ddd5; border: none;")
+        self.scroll_area.setStyleSheet("background-color: #121212; border: none;")
         
         self.messages_container = QWidget()
         self.messages_layout = QVBoxLayout(self.messages_container)
@@ -56,14 +56,14 @@ class ChatWindow(QWidget):
         
         # Input Area
         input_container = QFrame()
-        input_container.setStyleSheet("background-color: #f0f2f5; padding: 10px;")
+        input_container.setStyleSheet("background-color: #1e1e24; padding: 10px; border-top: 1px solid #333333;")
         input_layout = QHBoxLayout(input_container)
         input_layout.setContentsMargins(10, 10, 10, 10)
         
         self.input_field = QTextEdit()
         self.input_field.setFixedHeight(40)
         self.input_field.setPlaceholderText("Type a message...")
-        self.input_field.setStyleSheet("background-color: white; border-radius: 20px; padding: 5px; border: 1px solid #ccc;")
+        self.input_field.setStyleSheet("background-color: #2b2b36; color: #ffffff; border-radius: 20px; padding: 5px 15px; border: 1px solid #3f3f4e;")
         self.input_field.textChanged.connect(self.on_my_typing)
         
         self.send_button = QPushButton("Send")
@@ -84,10 +84,10 @@ class ChatWindow(QWidget):
     def update_status(self, is_connected):
         if is_connected:
             self.status_label.setText("Online")
-            self.status_label.setStyleSheet("font-size: 12px; color: green; padding: 0 10px 5px 10px;")
+            self.status_label.setStyleSheet("font-size: 12px; color: #10b981; padding: 0 10px 5px 10px;")
         else:
             self.status_label.setText("Offline")
-            self.status_label.setStyleSheet("font-size: 12px; color: gray; padding: 0 10px 5px 10px;")
+            self.status_label.setStyleSheet("font-size: 12px; color: #a1a1aa; padding: 0 10px 5px 10px;")
 
     def _load_history(self):
         # Clear existing messages before loading
@@ -115,7 +115,7 @@ class ChatWindow(QWidget):
         
         text_label = QLabel(text)
         text_label.setWordWrap(True)
-        text_label.setStyleSheet("font-size: 14px; background: transparent; color: black;")
+        text_label.setStyleSheet("font-size: 14px; background: transparent; color: #ffffff;")
         bubble_layout.addWidget(text_label)
         
         time_str = timestamp[-8:-3] if timestamp else "Now"
@@ -127,16 +127,16 @@ class ChatWindow(QWidget):
             time_str += ticks
             
         time_label = QLabel(time_str)
-        time_label.setStyleSheet("font-size: 10px; color: gray; background: transparent;")
+        time_label.setStyleSheet("font-size: 10px; color: #a1a1aa; background: transparent;")
         time_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         bubble_layout.addWidget(time_label)
         
         if is_mine:
-            bubble.setStyleSheet("background-color: #dcf8c6; border-radius: 10px;")
+            bubble.setStyleSheet("background-color: #005c4b; border-radius: 10px;")
             msg_layout.addStretch()
             msg_layout.addWidget(bubble)
         else:
-            bubble.setStyleSheet("background-color: white; border-radius: 10px;")
+            bubble.setStyleSheet("background-color: #202c33; border-radius: 10px;")
             msg_layout.addWidget(bubble)
             msg_layout.addStretch()
             

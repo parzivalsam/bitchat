@@ -26,6 +26,9 @@ class ChatManager(QObject):
         # Dict to track cooldowns for scanning
         self.attempted_reconnects = {}
         
+        # Guard set to prevent duplicate chunk transmission loops
+        self.active_sends = set()
+        
         # Single message handler for incoming chunks
         self.message_handler = MessageHandler()
 
@@ -42,6 +45,11 @@ class ChatManager(QObject):
             user_id = payload.get("sender_id", sender_address)
             user_name = payload.get("sender_name", "Unknown")
             text = payload.get("text", "")
+            
+            # Map MAC to user_id dynamically if we resolved from a MAC-based connection
+            if (":" in sender_address or "-" in sender_address) and user_id != sender_address:
+                if ":" not in user_id and "-" not in user_id:
+                    self.user_to_mac[user_id] = sender_address
         except Exception:
             # Fallback for old/corrupted messages
             msg_type = "msg"
@@ -125,8 +133,8 @@ class ChatManager(QObject):
         asyncio.create_task(self._connect_and_ack(user_id))
         
     async def _connect_and_ack(self, user_id):
-        success = await self.connect_to_user(user_id)
-        if success and self.crypto:
+        await self.connect_to_user(user_id)
+        if self.crypto:
             import json
             payload = json.dumps({
                 "type": "conn_ack",
@@ -138,9 +146,12 @@ class ChatManager(QObject):
             # Send backwards over client if avail, else broadcast over server
             device_address = self.user_to_mac.get(user_id, user_id)
             client = self.active_clients.get(device_address)
-            if client and client.client.is_connected:
-                await client.send_message(payload, 0)
-            elif self.server:
+            
+            success = False
+            if client:
+                success = await client.send_message(payload, 0)
+                
+            if not success and self.server:
                 from messaging.packet_protocol import PacketProtocol
                 _, chunks = PacketProtocol.create_chunks(payload, 0)
                 for chunk in chunks:
@@ -153,7 +164,7 @@ class ChatManager(QObject):
         # Check if we ALREADY have an active, connected client for this user_id
         if target_id in self.user_to_mac:
             known_mac = self.user_to_mac[target_id]
-            if known_mac in self.active_clients and self.active_clients[known_mac].client.is_connected:
+            if known_mac in self.active_clients:
                 return True
 
         # MAC addresses usually have : or -
@@ -202,53 +213,62 @@ class ChatManager(QObject):
             pending = self.db.get_pending_messages()
             
             for msg_id, chat_id, text in pending:
-                device_address = chat_id
-                if ":" not in chat_id and "-" not in chat_id:
-                    device_address = self.user_to_mac.get(chat_id, chat_id)
-                
-                is_connected = False
-                now = time.time()
-                
-                if device_address in self.active_clients and self.active_clients[device_address].client.is_connected:
-                    is_connected = True
-                elif now - self.attempted_reconnects.get(chat_id, 0) > 60:
-                    self.attempted_reconnects[chat_id] = now
-                    is_connected = await self.connect_to_user(chat_id)
-                
-                if is_connected:
-                    payload_dict = {
-                        "type": "msg",
-                        "msg_id": msg_id,
-                        "sender_id": self.current_user_id,
-                        "sender_name": self.current_user_name,
-                        "text": text
-                    }
+                str_msg_id = str(msg_id)
+                if str_msg_id in self.active_sends:
+                    continue
                     
-                    secret = self.db.get_chat_secret(chat_id)
-                    if secret and self.crypto:
-                        payload_dict["text"] = self.crypto.encrypt_message(text, secret)
-                        payload_dict["encrypted"] = True
+                self.active_sends.add(str_msg_id)
+                try:
+                    device_address = chat_id
+                    if ":" not in chat_id and "-" not in chat_id:
+                        device_address = self.user_to_mac.get(chat_id, chat_id)
+                    
+                    is_connected = False
+                    now = time.time()
+                    
+                    if device_address in self.active_clients and self.active_clients[device_address].client.is_connected:
+                        is_connected = True
+                    elif now - self.attempted_reconnects.get(chat_id, 0) > 60:
+                        self.attempted_reconnects[chat_id] = now
+                        is_connected = await self.connect_to_user(chat_id)
+                    
+                    if is_connected:
+                        payload_dict = {
+                            "type": "msg",
+                            "msg_id": msg_id,
+                            "sender_id": self.current_user_id,
+                            "sender_name": self.current_user_name,
+                            "text": text
+                        }
                         
-                    payload = json.dumps(payload_dict)
-                    
-                    device_address = self.user_to_mac.get(chat_id, chat_id)
-                    client = self.active_clients.get(device_address)
-                    msg_id_int = int(msg_id) if msg_id.isdigit() else 0
-                    
-                    success = False
-                    if client and client.client.is_connected:
-                        success = await client.send_message(payload, msg_id_int)
-                    elif self.server:
-                        from messaging.packet_protocol import PacketProtocol
-                        _, chunks = PacketProtocol.create_chunks(payload, msg_id_int)
-                        for chunk in chunks:
-                            await self.server.send_notification(chunk)
-                            await asyncio.sleep(0.05)
-                        success = True # Assume success if broadcasted via Server
-
-                    if success:
-                        self.db.update_message_status(msg_id, "sent")
-                        self.message_status_changed.emit(chat_id, msg_id, "sent")
+                        secret = self.db.get_chat_secret(chat_id)
+                        if secret and self.crypto:
+                            payload_dict["text"] = self.crypto.encrypt_message(text, secret)
+                            payload_dict["encrypted"] = True
+                            
+                        payload = json.dumps(payload_dict)
+                        
+                        device_address = self.user_to_mac.get(chat_id, chat_id)
+                        client = self.active_clients.get(device_address)
+                        msg_id_int = int(msg_id) if msg_id.isdigit() else 0
+                        
+                        success = False
+                        if client:
+                            success = await client.send_message(payload, msg_id_int)
+                            
+                        if not success and self.server:
+                            from messaging.packet_protocol import PacketProtocol
+                            _, chunks = PacketProtocol.create_chunks(payload, msg_id_int)
+                            for chunk in chunks:
+                                await self.server.send_notification(chunk)
+                                await asyncio.sleep(0.05)
+                            success = True # Assume success if broadcasted via Server
+    
+                        if success:
+                            self.db.update_message_status(msg_id, "sent")
+                            self.message_status_changed.emit(chat_id, msg_id, "sent")
+                finally:
+                    self.active_sends.discard(str_msg_id)
 
     async def send_message(self, chat_id, text):
         """Sends a message to the specified chat_id (device address)"""
@@ -259,70 +279,80 @@ class ChatManager(QObject):
         self.db.save_message(str_msg_id, chat_id, self.current_user_id, text, status="pending")
         self.message_received.emit(chat_id, str_msg_id, self.current_user_id, text)
 
-        import json
-        payload = {
-            "type": "msg",
-            "msg_id": str_msg_id,
-            "sender_id": self.current_user_id,
-            "sender_name": self.current_user_name,
-            "text": text
-        }
-        
-        # Encrypt text if we have a shared secret
-        secret = self.db.get_chat_secret(chat_id)
-        if secret and self.crypto:
-            payload["text"] = self.crypto.encrypt_message(text, secret)
-            payload["encrypted"] = True
+        if str_msg_id in self.active_sends:
+            return False
             
-        payload_str = json.dumps(payload)
-
-        # Resolve MAC and connection
-        device_address = chat_id
-        if ":" not in chat_id and "-" not in chat_id and len(chat_id) == 8:
-            device_address = self.user_to_mac.get(chat_id, chat_id)
-
-        if device_address not in self.active_clients or not self.active_clients[device_address].client.is_connected:
-            if device_address == "unknown_sender":
-                return False
+        self.active_sends.add(str_msg_id)
+        try:
+            import json
+            payload = {
+                "type": "msg",
+                "msg_id": str_msg_id,
+                "sender_id": self.current_user_id,
+                "sender_name": self.current_user_name,
+                "text": text
+            }
+            
+            # Encrypt text if we have a shared secret
+            secret = self.db.get_chat_secret(chat_id)
+            if secret and self.crypto:
+                payload["text"] = self.crypto.encrypt_message(text, secret)
+                payload["encrypted"] = True
                 
-            # Try to connect
-            success = await self.connect_to_user(chat_id)
-            if not success:
-                print(f"Failed to connect to {chat_id} to send message. Queued offline.")
-                return False
-                
-            # Re-resolve MAC in case it changed during scan
+            payload_str = json.dumps(payload)
+    
+            # Resolve MAC and connection
+            device_address = chat_id
             if ":" not in chat_id and "-" not in chat_id and len(chat_id) == 8:
                 device_address = self.user_to_mac.get(chat_id, chat_id)
-                
-        client = self.active_clients.get(device_address)
-        
-        success = False
-        if client and client.client.is_connected:
-            success = await client.send_message(payload_str, msg_id_int)
-        elif self.server:
-            from messaging.packet_protocol import PacketProtocol
-            _, chunks = PacketProtocol.create_chunks(payload_str, msg_id_int)
-            for chunk in chunks:
-                await self.server.send_notification(chunk)
-                await asyncio.sleep(0.05)
-            success = True
+    
+            client_connected = False
+            if device_address in self.active_clients and self.active_clients[device_address].client.is_connected:
+                client_connected = True
+            else:
+                if device_address != "unknown_sender":
+                    # Try to connect
+                    client_connected = await self.connect_to_user(chat_id)
+                    # Re-resolve MAC in case it changed during scan
+                    if ":" not in chat_id and "-" not in chat_id and len(chat_id) == 8:
+                        device_address = self.user_to_mac.get(chat_id, chat_id)
+                    
+            client = self.active_clients.get(device_address)
             
-        if success:
-            self.db.update_message_status(str_msg_id, "sent")
-            self.message_status_changed.emit(chat_id, str_msg_id, "sent")
-        return success
+            success = False
+            if client_connected and client:
+                success = await client.send_message(payload_str, msg_id_int)
+                
+            if not success and self.server:
+                from messaging.packet_protocol import PacketProtocol
+                _, chunks = PacketProtocol.create_chunks(payload_str, msg_id_int)
+                for chunk in chunks:
+                    await self.server.send_notification(chunk)
+                    await asyncio.sleep(0.05)
+                success = True
+            elif not success:
+                print(f"Failed to connect and no active server for {chat_id}. Queued offline.")
+                return False
+                
+            if success:
+                self.db.update_message_status(str_msg_id, "sent")
+                self.message_status_changed.emit(chat_id, str_msg_id, "sent")
+            return success
+        finally:
+            self.active_sends.discard(str_msg_id)
 
     async def send_typing(self, chat_id):
         device_address = chat_id
         if ":" not in chat_id and "-" not in chat_id and len(chat_id) == 8:
             device_address = self.user_to_mac.get(chat_id, chat_id)
-        if device_address in self.active_clients and self.active_clients[device_address].client.is_connected:
+        success = False
+        if device_address in self.active_clients:
             import json
             payload = json.dumps({"type": "typing", "sender_id": self.current_user_id})
             client = self.active_clients[device_address]
-            await client.send_message(payload, 0)
-        elif self.server:
+            success = await client.send_message(payload, 0)
+            
+        if not success and self.server:
             import json
             from messaging.packet_protocol import PacketProtocol
             payload = json.dumps({"type": "typing", "sender_id": self.current_user_id})
@@ -335,7 +365,8 @@ class ChatManager(QObject):
         device_address = chat_id
         if ":" not in chat_id and "-" not in chat_id and len(chat_id) == 8:
             device_address = self.user_to_mac.get(chat_id, chat_id)
-        if device_address in self.active_clients and self.active_clients[device_address].client.is_connected and self.crypto:
+        success = False
+        if device_address in self.active_clients and self.crypto:
             import json
             payload = json.dumps({
                 "type": "conn_req",
@@ -344,8 +375,9 @@ class ChatManager(QObject):
                 "pub_key": self.crypto.get_public_key_b64()
             })
             client = self.active_clients[device_address]
-            await client.send_message(payload, 0)
-        elif self.server and self.crypto:
+            success = await client.send_message(payload, 0)
+            
+        if not success and self.server and self.crypto:
             import json
             from messaging.packet_protocol import PacketProtocol
             payload = json.dumps({
@@ -363,16 +395,19 @@ class ChatManager(QObject):
         device_address = chat_id
         if ":" not in chat_id and "-" not in chat_id and len(chat_id) == 8:
             device_address = self.user_to_mac.get(chat_id, chat_id)
-        if device_address in self.active_clients and self.active_clients[device_address].client.is_connected:
+        success = False
+        if device_address in self.active_clients:
             import json
             payload = json.dumps({"type": "ack", "msg_id": msg_id, "sender_id": self.current_user_id})
             client = self.active_clients[device_address]
-            await client.send_message(payload, 0)
-        elif self.server:
+            success = await client.send_message(payload, 0)
+            
+        if not success and self.server:
             import json
             from messaging.packet_protocol import PacketProtocol
             payload = json.dumps({"type": "ack", "msg_id": msg_id, "sender_id": self.current_user_id})
             _, chunks = PacketProtocol.create_chunks(payload, 0)
             for chunk in chunks:
                 await self.server.send_notification(chunk)
+                await asyncio.sleep(0.05)
                 await asyncio.sleep(0.02)

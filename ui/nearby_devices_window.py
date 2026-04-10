@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt
 from qasync import asyncSlot
 import asyncio
 
+# kaam kar rha hai repo
 
 class NearbyDevicesWindow(QDialog):
     def __init__(self, scanner, chat_manager, parent=None):
@@ -20,7 +21,7 @@ class NearbyDevicesWindow(QDialog):
 
         self.setWindowTitle("Nearby Devices")
         self.setFixedSize(400, 500)
-        self.setStyleSheet("background-color: white;")
+        self.setStyleSheet("background-color: #121212; color: #ffffff;")
 
         self.devices = {}  # address -> name
 
@@ -34,16 +35,16 @@ class NearbyDevicesWindow(QDialog):
 
         title = QLabel("Scanning for nearby devices...")
         title.setStyleSheet(
-            "font-size: 16px; font-weight: bold; color: #333; padding: 10px;"
+            "font-size: 16px; font-weight: bold; color: #ffffff; padding: 10px;"
         )
         layout.addWidget(title)
 
         self.list_widget = QListWidget()
         self.list_widget.setStyleSheet(
             """
-            QListWidget { border: 1px solid #ccc; border-radius: 5px; }
-            QListWidget::item { padding: 10px; border-bottom: 1px solid #eee; }
-            QListWidget::item:selected { background-color: #f0f2f5; color: black; }
+            QListWidget { border: 1px solid #333333; border-radius: 5px; background-color: #1e1e24; color: #e4e4e7; }
+            QListWidget::item { padding: 10px; border-bottom: 1px solid #333333; }
+            QListWidget::item:selected { background-color: #3a3b45; color: #ffffff; }
         """
         )
         layout.addWidget(self.list_widget)
@@ -52,7 +53,7 @@ class NearbyDevicesWindow(QDialog):
 
         self.scan_btn = QPushButton("Stop Scan")
         self.scan_btn.setStyleSheet(
-            "padding: 10px; background-color: #f0f2f5; border-radius: 5px;"
+            "padding: 10px; background-color: #2b2b36; color: #ffffff; border-radius: 5px;"
         )
         self.scan_btn.clicked.connect(self.toggle_scan)
         btn_layout.addWidget(self.scan_btn)
@@ -62,7 +63,7 @@ class NearbyDevicesWindow(QDialog):
             """
             QPushButton { background-color: #00a884; color: white; padding: 10px; font-weight: bold; border-radius: 5px; }
             QPushButton:hover { background-color: #008f6f; }
-            QPushButton:disabled { background-color: #ccc; }
+            QPushButton:disabled { background-color: #3a3b45; color: #a1a1aa; }
         """
         )
         self.connect_btn.clicked.connect(self.connect_to_selected)

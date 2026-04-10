@@ -23,7 +23,7 @@ class BLEGattClient(QObject):
     def notification_handler(self, sender, data):
         """Called when the server notifies via MSG_NOTIFY_UUID"""
         print(f"Received notification from {sender}: {data}")
-        self.notification_received.emit(data)
+        self.notification_received.emit(bytes(data))
 
     async def connect(self):
         try:

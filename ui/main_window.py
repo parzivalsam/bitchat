@@ -27,7 +27,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("BLE Proximity Chat")
         self.resize(1000, 700)
-        self.setStyleSheet("background-color: white;")
+        self.setStyleSheet("background-color: #121212; color: #ffffff;")
 
         self.chat_windows = {}  # chat_id -> ChatWindow
 
@@ -56,25 +56,25 @@ class MainWindow(QMainWindow):
         sidebar = QWidget()
         sidebar.setFixedWidth(350)
         sidebar.setStyleSheet(
-            "background-color: #f8f9fa; border-right: 1px solid #ddd;"
+            "background-color: #1e1e24; border-right: 1px solid #333333;"
         )
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
 
         # Header
         header = QWidget()
-        header.setStyleSheet("background-color: #f0f2f5; padding: 15px;")
+        header.setStyleSheet("background-color: #2b2b36; padding: 15px;")
         header_layout = QHBoxLayout(header)
 
         title_label = QLabel("Chats")
-        title_label.setStyleSheet("font-size: 20px; font-weight: bold;")
+        title_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #ffffff;")
         header_layout.addWidget(title_label)
 
         nearby_btn = QPushButton("📡 Nearby")
         nearby_btn.setStyleSheet(
             """
-            QPushButton { background-color: #e4e6eb; border-radius: 15px; padding: 8px 15px; font-weight: bold; border: none; }
-            QPushButton:hover { background-color: #d8dadf; }
+            QPushButton { background-color: #3a3b45; color: #ffffff; border-radius: 15px; padding: 8px 15px; font-weight: bold; border: none; }
+            QPushButton:hover { background-color: #4a4b59; }
         """
         )
         nearby_btn.clicked.connect(self.show_nearby_devices)
@@ -86,9 +86,9 @@ class MainWindow(QMainWindow):
         self.chat_list = QListWidget()
         self.chat_list.setStyleSheet(
             """
-            QListWidget { border: none; background: transparent; }
-            QListWidget::item { padding: 15px; border-bottom: 1px solid #eee; }
-            QListWidget::item:selected { background-color: #ebebeb; color: black; }
+            QListWidget { border: none; background: transparent; color: #e4e4e7; }
+            QListWidget::item { padding: 15px; border-bottom: 1px solid #333333; }
+            QListWidget::item:selected { background-color: #3a3b45; color: #ffffff; }
         """
         )
         self.chat_list.itemClicked.connect(self.on_chat_selected)
@@ -98,12 +98,12 @@ class MainWindow(QMainWindow):
 
         # --- RIGHT AREA (Chat View) ---
         self.right_area = QStackedWidget()
-        self.right_area.setStyleSheet("background-color: #efeae2;")
+        self.right_area.setStyleSheet("background-color: #121212;")
 
         # Welcome screen
         welcome = QLabel("Select a chat or find nearby devices to start messaging")
         welcome.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        welcome.setStyleSheet("font-size: 16px; color: gray;")
+        welcome.setStyleSheet("font-size: 16px; color: #a1a1aa;")
         self.right_area.addWidget(welcome)
 
         main_layout.addWidget(self.right_area)
@@ -191,15 +191,22 @@ class MainWindow(QMainWindow):
 
     def on_connection_request(self, user_id, user_name, text, msg_id):
         from PyQt6.QtWidgets import QMessageBox
-        reply = QMessageBox.question(self, 'Connection Request',
-            f"{user_name} wants to connect and sent:\n\n{text}\n\nAccept connection?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes)
-            
-        if reply == QMessageBox.StandardButton.Yes:
-            self.chat_manager.accept_connection(user_id, user_name, text, msg_id)
-            self._load_chats()
-            self._open_chat_by_id(user_id)
+        
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle('Connection Request')
+        msg_box.setText(f"{user_name} wants to connect and sent:\n\n{text}\n\nAccept connection?")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
+        
+        # Use open() instead of exec() to strictly prevent qasync event loop freezes
+        def on_finished(result):
+            if result == QMessageBox.StandardButton.Yes:
+                self.chat_manager.accept_connection(user_id, user_name, text, msg_id)
+                self._load_chats()
+                self._open_chat_by_id(user_id)
+                
+        msg_box.finished.connect(on_finished)
+        msg_box.open()
 
     def on_message_status_changed(self, chat_id, msg_id, status):
         # Reload chat history for the affected window to update ticks
@@ -211,8 +218,30 @@ class MainWindow(QMainWindow):
             self.chat_windows[user_id].show_typing_indicator()
 
     def closeEvent(self, event):
-        # Stop BLE server when closing
-        if self.server:
-            import asyncio
-            asyncio.get_event_loop().create_task(self.server.stop_server())
-        super().closeEvent(event)
+        # Prevent multiple close tasks if user clicks X repeatedly
+        if hasattr(self, '_is_closing') and self._is_closing:
+            event.ignore()
+            return
+            
+        self._is_closing = True
+        
+        # Hide window instantly so it feels responsive
+        self.hide()
+        event.ignore()
+        
+        import asyncio
+        from PyQt6.QtWidgets import QApplication
+        import sys
+        import os
+        
+        async def safely_shutdown():
+            try:
+                if self.server:
+                    await self.server.stop_server()
+                if self.scanner.is_scanning:
+                    await self.scanner.stop_scanning()
+            finally:
+                QApplication.quit()
+                os._exit(0) # Force hard exit to prevent bless from keeping python alive
+            
+        asyncio.get_event_loop().create_task(safely_shutdown())
